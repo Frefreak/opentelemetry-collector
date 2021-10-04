@@ -8,7 +8,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/mux v1.8.0
-	github.com/knadh/koanf v1.2.3
+	github.com/knadh/koanf v1.2.4
 	github.com/magiconair/properties v1.8.5
 	github.com/mitchellh/mapstructure v1.4.1
 	github.com/prometheus/common v0.30.0
@@ -23,6 +23,7 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.23.0
 	go.opentelemetry.io/contrib/zpages v0.23.0
 	go.opentelemetry.io/otel v1.0.0-RC3
+	go.opentelemetry.io/otel/metric v0.23.0
 	go.opentelemetry.io/otel/sdk v1.0.0-RC3
 	go.opentelemetry.io/otel/trace v1.0.0-RC3
 	go.uber.org/atomic v1.9.0
@@ -61,7 +62,6 @@ require (
 	github.com/tklauser/numcpus v0.2.2 // indirect
 	go.opentelemetry.io/contrib v0.23.0 // indirect
 	go.opentelemetry.io/otel/internal/metric v0.23.0 // indirect
-	go.opentelemetry.io/otel/metric v0.23.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
 	golang.org/x/net v0.0.0-20210614182718-04defd469f4e // indirect
 	golang.org/x/text v0.3.6 // indirect
