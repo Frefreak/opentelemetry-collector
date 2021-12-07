@@ -16,9 +16,13 @@ package otlpreceiver // import "go.opentelemetry.io/collector/receiver/otlprecei
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
+
+	"go.opencensus.io/stats"
+	"go.opencensus.io/stats/view"
 
 	"github.com/gorilla/mux"
 	"google.golang.org/grpc"
@@ -57,8 +61,17 @@ func newOtlpReceiver(cfg *Config, settings component.ReceiverCreateSettings) *ot
 		cfg:      cfg,
 		settings: settings,
 	}
+	if err := view.Register(MetricViews()...); err != nil {
+		fmt.Println("failed to register metric views")
+		return nil
+	}
 	if cfg.HTTP != nil {
 		r.httpMux = mux.NewRouter()
+		r.httpMux.NotFoundHandler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(404)
+			stats.Record(request.Context(), http404RequestCount.M(1))
+			_, _ = writer.Write([]byte("404 page not found"))
+		})
 	}
 
 	return r
