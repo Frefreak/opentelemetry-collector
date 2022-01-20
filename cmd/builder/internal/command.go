@@ -61,7 +61,6 @@ func Command() (*cobra.Command, error) {
 	cmd.Flags().StringVar(&cfg.Distribution.Name, "name", "otelcol-custom", "The executable name for the OpenTelemetry Collector distribution")
 	cmd.Flags().StringVar(&cfg.Distribution.Description, "description", "Custom OpenTelemetry Collector distribution", "A descriptive name for the OpenTelemetry Collector distribution")
 	cmd.Flags().StringVar(&cfg.Distribution.Version, "version", "1.0.0", "The version for the OpenTelemetry Collector distribution")
-	cmd.Flags().BoolVar(&cfg.Distribution.IncludeCore, "include-core", true, "Whether the core components should be included in the distribution")
 	cmd.Flags().StringVar(&cfg.Distribution.OtelColVersion, "otelcol-version", cfg.Distribution.OtelColVersion, "Which version of OpenTelemetry Collector to use as base")
 	cmd.Flags().StringVar(&cfg.Distribution.OutputPath, "output-path", cfg.Distribution.OutputPath, "Where to write the resulting files")
 	cmd.Flags().StringVar(&cfg.Distribution.Go, "go", "", "The Go binary to use during the compilation phase. Default: go from the PATH")
@@ -103,7 +102,7 @@ func initConfig() error {
 	cfg.Logger.Info("Using config file", zap.String("path", vp.ConfigFileUsed()))
 
 	// convert Viper's internal state into our configuration object
-	if err := vp.Unmarshal(&cfg); err != nil {
+	if err := vp.UnmarshalExact(&cfg); err != nil {
 		cfg.Logger.Error("failed to parse the config", zap.Error(err))
 		return err
 	}

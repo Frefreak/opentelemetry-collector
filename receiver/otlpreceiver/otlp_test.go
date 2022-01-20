@@ -24,14 +24,18 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
@@ -45,6 +49,7 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/internal/internalconsumertest"
+	"go.opentelemetry.io/collector/internal/sharedcomponent"
 	"go.opentelemetry.io/collector/internal/testdata"
 	"go.opentelemetry.io/collector/internal/testutil"
 	"go.opentelemetry.io/collector/model/otlp"
@@ -506,7 +511,7 @@ func TestOTLPReceiverTrace_HandleNextConsumerResponse(t *testing.T) {
 				require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()))
 				t.Cleanup(func() { require.NoError(t, ocr.Shutdown(context.Background())) })
 
-				cc, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
+				cc, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 				require.NoError(t, err)
 				defer cc.Close()
 
@@ -576,7 +581,7 @@ func TestGRPCMaxRecvSize(t *testing.T) {
 	require.NotNil(t, ocr)
 	require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()))
 
-	cc, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
+	cc, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 	require.NoError(t, err)
 
 	td := testdata.GenerateTracesManySpansSameResource(50000)
@@ -591,7 +596,7 @@ func TestGRPCMaxRecvSize(t *testing.T) {
 	require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()))
 	t.Cleanup(func() { require.NoError(t, ocr.Shutdown(context.Background())) })
 
-	cc, err = grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
+	cc, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 	require.NoError(t, err)
 	defer cc.Close()
 
@@ -626,6 +631,41 @@ func TestHTTPInvalidTLSCredentials(t *testing.T) {
 	assert.NotNil(t, r)
 	assert.EqualError(t, r.Start(context.Background(), componenttest.NewNopHost()),
 		`failed to load TLS config: for auth via TLS, either both certificate and key must be supplied, or neither`)
+}
+
+func TestHTTPUseLegacyPortWhenUsingDefaultEndpoint(t *testing.T) {
+	r := newHTTPReceiver(t, defaultHTTPEndpoint, consumertest.NewNop(), consumertest.NewNop())
+	require.NotNil(t, r)
+
+	logCore, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(logCore)
+
+	metric := r.(*sharedcomponent.SharedComponent).Unwrap().(*otlpReceiver)
+	metric.settings.Logger = logger
+
+	t.Cleanup(func() { require.NoError(t, r.Shutdown(context.Background())) })
+
+	require.NoError(t, r.Start(context.Background(), componenttest.NewNopHost()))
+
+	require.True(t, func() bool {
+		for _, l := range logs.All() {
+			if strings.Contains(l.Message, "Setting up a second HTTP listener on legacy endpoint 0.0.0.0:55681") {
+				return true
+			}
+		}
+		return false
+	}())
+
+	require.False(t, func() bool {
+		for _, l := range logs.All() {
+			if strings.Contains(l.Message, "Legacy HTTP endpoint 0.0.0.0:55681 is configured, please use 0.0.0.0:4318 instead.") {
+				return true
+			}
+		}
+		return false
+	}())
+
+	require.Equal(t, defaultHTTPEndpoint, metric.cfg.HTTP.Endpoint)
 }
 
 func newGRPCReceiver(t *testing.T, name string, endpoint string, tc consumer.Traces, mc consumer.Metrics) component.Component {
@@ -698,7 +738,7 @@ func TestShutdown(t *testing.T) {
 	require.NotNil(t, r)
 	require.NoError(t, r.Start(context.Background(), componenttest.NewNopHost()))
 
-	conn, err := grpc.Dial(endpointGrpc, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.Dial(endpointGrpc, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 	require.NoError(t, err)
 	defer conn.Close()
 

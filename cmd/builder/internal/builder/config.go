@@ -25,7 +25,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultOtelColVersion = "0.40.0"
+const defaultOtelColVersion = "0.42.0"
 
 // ErrInvalidGoMod indicates an invalid gomod
 var ErrInvalidGoMod = errors.New("invalid gomod specification for module")
@@ -54,7 +54,6 @@ type Distribution struct {
 	Go             string `mapstructure:"go"`
 	Description    string `mapstructure:"description"`
 	OtelColVersion string `mapstructure:"otelcol_version"`
-	IncludeCore    bool   `mapstructure:"include_core"`
 	OutputPath     string `mapstructure:"output_path"`
 	Version        string `mapstructure:"version"`
 }
@@ -100,6 +99,7 @@ func (c *Config) Validate() error {
 		}
 		c.Distribution.Go = path
 	}
+
 	c.Logger.Info("Using go", zap.String("go-executable", c.Distribution.Go))
 
 	return nil

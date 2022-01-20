@@ -98,7 +98,7 @@ func (r *otlpReceiver) startGRPCServer(cfg *configgrpc.GRPCServerSettings, host 
 func (r *otlpReceiver) startHTTPServer(cfg *confighttp.HTTPServerSettings, host component.Host) error {
 	r.settings.Logger.Info("Starting HTTP server on endpoint " + cfg.Endpoint)
 	var hln net.Listener
-	hln, err := r.cfg.HTTP.ToListener()
+	hln, err := cfg.ToListener()
 	if err != nil {
 		return err
 	}
@@ -141,11 +141,16 @@ func (r *otlpReceiver) startProtocolServers(host component.Host) error {
 		}
 	}
 	if r.cfg.HTTP != nil {
-		r.serverHTTP = r.cfg.HTTP.ToServer(
-			r.httpMux,
+		r.serverHTTP, err = r.cfg.HTTP.ToServer(
+			host,
 			r.settings.TelemetrySettings,
+			r.httpMux,
 			confighttp.WithErrorHandler(errorHandler),
 		)
+		if err != nil {
+			return err
+		}
+
 		err = r.startHTTPServer(r.cfg.HTTP, host)
 		if err != nil {
 			return err
@@ -154,13 +159,17 @@ func (r *otlpReceiver) startProtocolServers(host component.Host) error {
 			r.settings.Logger.Info("Setting up a second HTTP listener on legacy endpoint " + legacyHTTPEndpoint)
 
 			// Copy the config.
-			cfgLegacyHTTP := r.cfg.HTTP
+			cfgLegacyHTTP := *(r.cfg.HTTP)
 			// And use the legacy endpoint.
 			cfgLegacyHTTP.Endpoint = legacyHTTPEndpoint
-			err = r.startHTTPServer(cfgLegacyHTTP, host)
+			err = r.startHTTPServer(&cfgLegacyHTTP, host)
 			if err != nil {
 				return err
 			}
+		}
+		if r.cfg.HTTP.Endpoint == legacyHTTPEndpoint {
+			r.settings.Logger.Warn(fmt.Sprintf("Legacy HTTP endpoint %v is configured, please use %v instead.",
+				legacyHTTPEndpoint, defaultHTTPEndpoint))
 		}
 	}
 

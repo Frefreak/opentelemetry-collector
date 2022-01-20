@@ -15,16 +15,20 @@
 package configunmarshaler
 
 import (
-	"path"
+	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config"
+	"go.opentelemetry.io/collector/config/configmapprovider"
 	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/config/configtelemetry"
 	"go.opentelemetry.io/collector/internal/testcomponents"
 )
 
@@ -33,7 +37,7 @@ func TestDecodeConfig(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Unmarshal the config
-	cfg, err := loadConfigFile(t, path.Join(".", "testdata", "valid-config.yaml"), factories)
+	cfg, err := loadConfigFile(t, filepath.Join("testdata", "valid-config.yaml"), factories)
 	require.NoError(t, err, "Unable to load config")
 
 	// Verify extensions.
@@ -96,7 +100,23 @@ func TestDecodeConfig(t *testing.T) {
 		"Did not load processor config correctly")
 
 	// Verify Service Telemetry
-	assert.Equal(t, config.ServiceTelemetry{Logs: config.ServiceTelemetryLogs{Level: zapcore.DebugLevel, Development: true, Encoding: "console"}}, cfg.Service.Telemetry)
+	assert.Equal(t,
+		config.ServiceTelemetry{
+			Logs: config.ServiceTelemetryLogs{
+				Level:             zapcore.DebugLevel,
+				Development:       true,
+				Encoding:          "console",
+				DisableCaller:     true,
+				DisableStacktrace: true,
+				OutputPaths:       []string{"stderr", "./output-logs"},
+				ErrorOutputPaths:  []string{"stderr", "./error-output-logs"},
+				InitialFields:     map[string]interface{}{"field_key": "filed_value"},
+			},
+			Metrics: config.ServiceTelemetryMetrics{
+				Level:   configtelemetry.LevelNormal,
+				Address: ":8081",
+			},
+		}, cfg.Service.Telemetry)
 
 	// Verify Service Extensions
 	assert.Equal(t, 2, len(cfg.Service.Extensions))
@@ -164,6 +184,7 @@ func TestDecodeConfig_Invalid(t *testing.T) {
 		{name: "invalid-pipeline-sub-config", expected: errUnmarshalService},
 
 		{name: "invalid-logs-level", expected: errUnmarshalService},
+		{name: "invalid-metrics-level", expected: errUnmarshalService},
 	}
 
 	factories, err := testcomponents.ExampleComponents()
@@ -171,7 +192,7 @@ func TestDecodeConfig_Invalid(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := loadConfigFile(t, path.Join(".", "testdata", test.name+".yaml"), factories)
+			_, err := loadConfigFile(t, filepath.Join("testdata", test.name+".yaml"), factories)
 			require.Error(t, err)
 			if test.expected != 0 {
 				cfgErr, ok := err.(*configError)
@@ -193,7 +214,7 @@ func TestLoadEmpty(t *testing.T) {
 	factories, err := testcomponents.ExampleComponents()
 	assert.NoError(t, err)
 
-	_, err = loadConfigFile(t, path.Join(".", "testdata", "empty-config.yaml"), factories)
+	_, err = loadConfigFile(t, filepath.Join("testdata", "empty-config.yaml"), factories)
 	assert.NoError(t, err)
 }
 
@@ -201,14 +222,37 @@ func TestLoadEmptyAllSections(t *testing.T) {
 	factories, err := testcomponents.ExampleComponents()
 	assert.NoError(t, err)
 
-	_, err = loadConfigFile(t, path.Join(".", "testdata", "empty-all-sections.yaml"), factories)
+	_, err = loadConfigFile(t, filepath.Join("testdata", "empty-all-sections.yaml"), factories)
 	assert.NoError(t, err)
 }
 
 func loadConfigFile(t *testing.T, fileName string, factories component.Factories) (*config.Config, error) {
-	v, err := config.NewMapFromFile(fileName)
+	v, err := configmapprovider.NewFile(fileName).Retrieve(context.Background(), nil)
+	require.NoError(t, err)
+	cm, err := v.Get(context.Background())
 	require.NoError(t, err)
 
 	// Unmarshal the config from the config.Map using the given factories.
-	return NewDefault().Unmarshal(v, factories)
+	return NewDefault().Unmarshal(cm, factories)
+}
+
+func TestDefaultLoggerConfig(t *testing.T) {
+	factories, err := testcomponents.ExampleComponents()
+	assert.NoError(t, err)
+
+	cfg, err := loadConfigFile(t, filepath.Join("testdata", "empty-all-sections.yaml"), factories)
+	assert.NoError(t, err)
+
+	zapProdCfg := zap.NewProductionConfig()
+	assert.Equal(t,
+		config.ServiceTelemetryLogs{
+			Level:             zapProdCfg.Level.Level(),
+			Development:       zapProdCfg.Development,
+			Encoding:          "console",
+			DisableCaller:     zapProdCfg.DisableCaller,
+			DisableStacktrace: zapProdCfg.DisableStacktrace,
+			OutputPaths:       zapProdCfg.OutputPaths,
+			ErrorOutputPaths:  zapProdCfg.ErrorOutputPaths,
+			InitialFields:     zapProdCfg.InitialFields,
+		}, cfg.Service.Telemetry.Logs)
 }

@@ -56,7 +56,7 @@ func createTestPersistentStorageWithLoggingAndCapacity(client storage.Client, lo
 }
 
 func createTestPersistentStorage(client storage.Client) *persistentContiguousStorage {
-	logger, _ := zap.NewDevelopment()
+	logger := zap.NewNop()
 	return createTestPersistentStorageWithLoggingAndCapacity(client, logger, 1000)
 }
 
@@ -104,6 +104,123 @@ func newFakeTracesRequestUnmarshalerFunc() RequestUnmarshaler {
 	}
 }
 
+func TestPersistentStorage_CorruptedData(t *testing.T) {
+	path := createTemporaryDirectory()
+	defer os.RemoveAll(path)
+
+	traces := newTraces(5, 10)
+	req := newFakeTracesRequest(traces)
+
+	cases := []struct {
+		name                               string
+		corruptAllData                     bool
+		corruptSomeData                    bool
+		corruptCurrentlyDispatchedItemsKey bool
+		corruptReadIndex                   bool
+		corruptWriteIndex                  bool
+		desiredQueueSize                   uint64
+		desiredNumberOfDispatchedItems     int
+	}{
+		{
+			name:                           "corrupted no items",
+			corruptAllData:                 false,
+			desiredQueueSize:               2,
+			desiredNumberOfDispatchedItems: 1,
+		},
+		{
+			name:                           "corrupted all items",
+			corruptAllData:                 true,
+			desiredQueueSize:               0,
+			desiredNumberOfDispatchedItems: 0,
+		},
+		{
+			name:                           "corrupted some items",
+			corruptSomeData:                true,
+			desiredQueueSize:               1,
+			desiredNumberOfDispatchedItems: 1,
+		},
+		{
+			name:                               "corrupted dispatched items key",
+			corruptCurrentlyDispatchedItemsKey: true,
+			desiredQueueSize:                   1,
+			desiredNumberOfDispatchedItems:     1,
+		},
+		{
+			name:                           "corrupted read index",
+			corruptReadIndex:               true,
+			desiredQueueSize:               0,
+			desiredNumberOfDispatchedItems: 1,
+		},
+		{
+			name:                           "corrupted write index",
+			corruptWriteIndex:              true,
+			desiredQueueSize:               0,
+			desiredNumberOfDispatchedItems: 1,
+		},
+		{
+			name:                               "corrupted everything",
+			corruptAllData:                     true,
+			corruptCurrentlyDispatchedItemsKey: true,
+			corruptReadIndex:                   true,
+			corruptWriteIndex:                  true,
+			desiredQueueSize:                   0,
+			desiredNumberOfDispatchedItems:     0,
+		},
+	}
+
+	badBytes := []byte{0, 1, 2}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ext := createStorageExtension(path)
+			client := createTestClient(ext)
+			ps := createTestPersistentStorage(client)
+
+			ctx := context.Background()
+
+			// Put some items, make sure they are loaded and shutdown the storage...
+			for i := 0; i < 3; i++ {
+				err := ps.put(req)
+				require.NoError(t, err)
+			}
+			require.Eventually(t, func() bool {
+				return ps.size() == 2
+			}, 5*time.Second, 10*time.Millisecond)
+			ps.stop()
+
+			// ... so now we can corrupt data (in several ways)
+			if c.corruptAllData || c.corruptSomeData {
+				_ = client.Set(ctx, "0", badBytes)
+			}
+			if c.corruptAllData {
+				_ = client.Set(ctx, "1", badBytes)
+				_ = client.Set(ctx, "2", badBytes)
+			}
+
+			if c.corruptCurrentlyDispatchedItemsKey {
+				_ = client.Set(ctx, currentlyDispatchedItemsKey, badBytes)
+			}
+
+			if c.corruptReadIndex {
+				_ = client.Set(ctx, readIndexKey, badBytes)
+			}
+
+			if c.corruptWriteIndex {
+				_ = client.Set(ctx, writeIndexKey, badBytes)
+			}
+
+			// Reload
+			newPs := createTestPersistentStorage(client)
+
+			require.Eventually(t, func() bool {
+				newPs.mu.Lock()
+				defer newPs.mu.Unlock()
+				return newPs.size() == c.desiredQueueSize && len(newPs.currentlyDispatchedItems) == c.desiredNumberOfDispatchedItems
+			}, 5*time.Second, 10*time.Millisecond)
+		})
+	}
+}
+
 func TestPersistentStorage_CurrentlyProcessedItems(t *testing.T) {
 	path := createTemporaryDirectory()
 	defer os.RemoveAll(path)
@@ -142,7 +259,7 @@ func TestPersistentStorage_CurrentlyProcessedItems(t *testing.T) {
 	newPs := createTestPersistentStorage(client)
 	require.Eventually(t, func() bool {
 		return newPs.size() == 3
-	}, 500*time.Millisecond, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 
 	requireCurrentlyDispatchedItemsEqual(t, newPs, []itemIndex{3})
 
@@ -156,7 +273,7 @@ func TestPersistentStorage_CurrentlyProcessedItems(t *testing.T) {
 	requireCurrentlyDispatchedItemsEqual(t, newPs, nil)
 	require.Eventually(t, func() bool {
 		return newPs.size() == 0
-	}, 500*time.Millisecond, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 
 	// The writeIndex should be now set accordingly
 	require.Equal(t, 7, int(newPs.writeIndex))
@@ -198,7 +315,7 @@ func TestPersistentStorage_RepeatPutCloseReadClose(t *testing.T) {
 		// The first element should be already picked by loop
 		require.Eventually(t, func() bool {
 			return ps.size() == 1
-		}, 500*time.Millisecond, 10*time.Millisecond)
+		}, 5*time.Second, 10*time.Millisecond)
 
 		// Lets read both of the elements we put
 		readReq := getItemFromChannel(t, ps)
@@ -323,7 +440,7 @@ func getItemFromChannel(t *testing.T, pcs *persistentContiguousStorage) Persiste
 	require.Eventually(t, func() bool {
 		readReq = <-pcs.get()
 		return true
-	}, 500*time.Millisecond, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	return readReq
 }
 
@@ -332,7 +449,7 @@ func requireCurrentlyDispatchedItemsEqual(t *testing.T, pcs *persistentContiguou
 		pcs.mu.Lock()
 		defer pcs.mu.Unlock()
 		return reflect.DeepEqual(pcs.currentlyDispatchedItems, compare)
-	}, 500*time.Millisecond, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 type mockStorageExtension struct{}

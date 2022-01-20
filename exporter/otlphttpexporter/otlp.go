@@ -23,8 +23,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -33,10 +33,8 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config"
-	"go.opentelemetry.io/collector/config/configgrpc"
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
-	"go.opentelemetry.io/collector/internal/middleware"
 	"go.opentelemetry.io/collector/model/otlpgrpc"
 	"go.opentelemetry.io/collector/model/pdata"
 )
@@ -49,6 +47,9 @@ type exporter struct {
 	metricsURL string
 	logsURL    string
 	logger     *zap.Logger
+
+	// Default user-agent header.
+	userAgent string
 }
 
 const (
@@ -57,7 +58,7 @@ const (
 )
 
 // Crete new exporter.
-func newExporter(cfg config.Exporter, logger *zap.Logger) (*exporter, error) {
+func newExporter(cfg config.Exporter, logger *zap.Logger, buildInfo component.BuildInfo) (*exporter, error) {
 	oCfg := cfg.(*Config)
 
 	if oCfg.Endpoint != "" {
@@ -67,10 +68,14 @@ func newExporter(cfg config.Exporter, logger *zap.Logger) (*exporter, error) {
 		}
 	}
 
+	userAgent := fmt.Sprintf("%s/%s (%s/%s)",
+		buildInfo.Description, buildInfo.Version, runtime.GOOS, runtime.GOARCH)
+
 	// client construction is deferred to start
 	return &exporter{
-		config: oCfg,
-		logger: logger,
+		config:    oCfg,
+		logger:    logger,
+		userAgent: userAgent,
 	}, nil
 }
 
@@ -80,14 +85,6 @@ func (e *exporter) start(_ context.Context, host component.Host) error {
 	client, err := e.config.HTTPClientSettings.ToClient(host.GetExtensions())
 	if err != nil {
 		return err
-	}
-
-	if e.config.Compression != "" {
-		if strings.ToLower(e.config.Compression) == configgrpc.CompressionGzip {
-			client.Transport = middleware.NewCompressRoundTripper(client.Transport)
-		} else {
-			return fmt.Errorf("unsupported compression type %q", e.config.Compression)
-		}
 	}
 	e.client = client
 	return nil
@@ -132,6 +129,7 @@ func (e *exporter) export(ctx context.Context, url string, request []byte) error
 		return consumererror.NewPermanent(err)
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("User-Agent", e.userAgent)
 
 	resp, err := e.client.Do(req)
 	if err != nil {

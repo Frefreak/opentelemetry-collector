@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package configmapprovider
+package configprovider
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path"
 	"testing"
@@ -24,28 +23,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.opentelemetry.io/collector/config"
+	"go.opentelemetry.io/collector/config/configmapprovider"
+	"go.opentelemetry.io/collector/config/configtest"
 )
 
-func TestBaseRetrieveFailsOnRetrieve(t *testing.T) {
-	retErr := errors.New("test error")
-	exp := NewExpand(&mockProvider{retrieveErr: retErr})
-	t.Cleanup(func() { require.NoError(t, exp.Shutdown(context.Background())) })
-	_, err := exp.Retrieve(context.Background(), nil)
-	require.Error(t, err)
-	require.ErrorIs(t, err, retErr)
-}
-
-func TestBaseRetrieveFailsOnGet(t *testing.T) {
-	getErr := errors.New("test error")
-	exp := NewExpand(&mockProvider{retrieved: &mockRetrieved{getErr: getErr}})
-	t.Cleanup(func() { require.NoError(t, exp.Shutdown(context.Background())) })
-	_, err := exp.Retrieve(context.Background(), nil)
-	require.Error(t, err)
-	require.ErrorIs(t, err, getErr)
-}
-
-func TestExpand(t *testing.T) {
+func TestNewExpandConverter(t *testing.T) {
 	var testCases = []struct {
 		name string // test case name (also file name containing config yaml)
 	}{
@@ -69,25 +51,25 @@ func TestExpand(t *testing.T) {
 		assert.NoError(t, os.Unsetenv("EXTRA_LIST_VALUE_1"))
 	}()
 
-	expectedCfgMap, errExpected := config.NewMapFromFile(path.Join("testdata", "expand-with-no-env.yaml"))
+	// Cannot use configtest.LoadConfigMap because of circular deps.
+	ret, errRet := configmapprovider.NewFile(path.Join("testdata", "expand-with-no-env.yaml")).Retrieve(context.Background(), nil)
+	require.NoError(t, errRet, "Unable to get expected config")
+	expectedCfgMap, errExpected := ret.Get(context.Background())
 	require.NoError(t, errExpected, "Unable to get expected config")
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
-			// Retrieve the config
-			emp := NewExpand(NewFile(path.Join("testdata", test.name)))
-			cp, err := emp.Retrieve(context.Background(), nil)
+			cfgMap, err := configtest.LoadConfigMap(path.Join("testdata", test.name))
 			require.NoError(t, err, "Unable to get config")
 
 			// Test that expanded configs are the same with the simple config with no env vars.
-			m, err := cp.Get(context.Background())
-			require.NoError(t, err)
-			assert.Equal(t, expectedCfgMap.ToStringMap(), m.ToStringMap())
+			require.NoError(t, NewExpandConverter()(cfgMap))
+			assert.Equal(t, expectedCfgMap.ToStringMap(), cfgMap.ToStringMap())
 		})
 	}
 }
 
-func TestExpand_EscapedEnvVars(t *testing.T) {
+func TestNewExpandConverter_EscapedEnvVars(t *testing.T) {
 	const receiverExtraMapValue = "some map value"
 	assert.NoError(t, os.Setenv("MAP_VALUE_2", receiverExtraMapValue))
 	defer func() {
@@ -95,8 +77,7 @@ func TestExpand_EscapedEnvVars(t *testing.T) {
 	}()
 
 	// Retrieve the config
-	emp := NewExpand(NewFile(path.Join("testdata", "expand-escaped-env.yaml")))
-	cp, err := emp.Retrieve(context.Background(), nil)
+	cfgMap, err := configtest.LoadConfigMap(path.Join("testdata", "expand-escaped-env.yaml"))
 	require.NoError(t, err, "Unable to get config")
 
 	expectedMap := map[string]interface{}{
@@ -116,7 +97,6 @@ func TestExpand_EscapedEnvVars(t *testing.T) {
 			// escaped $ alone
 			"recv.7": "$",
 		}}
-	m, err := cp.Get(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, expectedMap, m.ToStringMap())
+	require.NoError(t, NewExpandConverter()(cfgMap))
+	assert.Equal(t, expectedMap, cfgMap.ToStringMap())
 }
